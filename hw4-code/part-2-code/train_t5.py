@@ -48,6 +48,8 @@ def get_args():
                         help="If set, we will use wandb to keep track of experiments")
     parser.add_argument('--experiment_name', type=str, default='experiment',
                         help="How should we name this experiment?")
+    parser.add_argument('--resume_from_checkpoint', type=str, default=None,
+                        help="Path to checkpoint directory to resume training from")
 
     # Data hyperparameters
     parser.add_argument('--batch_size', type=int, default=16)
@@ -64,6 +66,8 @@ def get_args():
                         help="Beam size for evaluation generation (reduce for faster eval)")
     parser.add_argument('--compile_model', action='store_true',
                         help="Use torch.compile for faster training (requires PyTorch 2.0+)")
+    parser.add_argument('--full_eval_every_n_epochs', type=int, default=1,
+                        help="Run full eval with generation every N epochs (other epochs: loss only)")
 
     args = parser.parse_args()
     return args
@@ -76,43 +80,60 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
     checkpoint_dir = os.path.join('checkpoints', f'{model_type}_experiments', args.experiment_name)
     os.makedirs(checkpoint_dir, exist_ok=True)
     args.checkpoint_dir = checkpoint_dir
-    experiment_name = 'ft_experiment'
+    experiment_name = args.experiment_name or 'ft_experiment'
     gt_sql_path = os.path.join(f'data/dev.sql')
     gt_record_path = os.path.join(f'records/ground_truth_dev.pkl')
     model_sql_path = os.path.join(f'results/t5_{model_type}_{experiment_name}_dev.sql')
     model_record_path = os.path.join(f'records/t5_{model_type}_{experiment_name}_dev.pkl')
+    
+    # Evaluate checkpoint before any training if resuming
+    if args.resume_from_checkpoint:
+        print("Evaluating checkpoint before training...")
+        eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
+                                                                         gt_sql_path, model_sql_path,
+                                                                         gt_record_path, model_record_path)
+        print(f"Pre-training: Dev loss: {eval_loss}, Record F1: {record_f1}, Record EM: {record_em}, SQL EM: {sql_em}")
+        print(f"Pre-training: {error_rate*100:.2f}% of the generated outputs led to SQL errors")
+        best_f1 = record_f1
+        save_model(checkpoint_dir, model, best=True)
+        if args.use_wandb:
+            wandb.log({'dev/record_f1': record_f1, 'dev/record_em': record_em, 
+                      'dev/sql_em': sql_em, 'dev/error_rate': error_rate}, step=-1)
+    
     for epoch in range(args.max_n_epochs):
         tr_loss = train_epoch(args, model, train_loader, optimizer, scheduler)
         print(f"Epoch {epoch}: Average train loss was {tr_loss}")
 
-        eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
-                                                                         gt_sql_path, model_sql_path,
-                                                                         gt_record_path, model_record_path)
-        print(f"Epoch {epoch}: Dev loss: {eval_loss}, Record F1: {record_f1}, Record EM: {record_em}, SQL EM: {sql_em}")
-        print(f"Epoch {epoch}: {error_rate*100:.2f}% of the generated outputs led to SQL errors")
+        # Full eval with generation every N epochs, fast eval otherwise
+        do_full_eval = epoch % args.full_eval_every_n_epochs == 0
+        
+        if do_full_eval:
+            eval_loss, record_f1, record_em, sql_em, error_rate = eval_epoch(args, model, dev_loader,
+                                                                             gt_sql_path, model_sql_path,
+                                                                             gt_record_path, model_record_path)
+            print(f"Epoch {epoch}: Dev loss: {eval_loss}, Record F1: {record_f1}, Record EM: {record_em}, SQL EM: {sql_em}")
+            print(f"Epoch {epoch}: {error_rate*100:.2f}% of the generated outputs led to SQL errors")
 
-        if args.use_wandb:
-            result_dict = {
-                'train/loss' : tr_loss,
-                'dev/loss' : eval_loss,
-                'dev/record_f1' : record_f1,
-                'dev/record_em' : record_em,
-                'dev/sql_em' : sql_em,
-                'dev/error_rate' : error_rate,
-            }
-            wandb.log(result_dict, step=epoch)
+            if args.use_wandb:
+                wandb.log({'train/loss': tr_loss, 'dev/loss': eval_loss, 'dev/record_f1': record_f1,
+                          'dev/record_em': record_em, 'dev/sql_em': sql_em, 'dev/error_rate': error_rate}, step=epoch)
 
-        if record_f1 > best_f1:
-            best_f1 = record_f1
-            epochs_since_improvement = 0
+            if record_f1 > best_f1:
+                best_f1 = record_f1
+                epochs_since_improvement = 0
+            else:
+                epochs_since_improvement += 1
         else:
-            epochs_since_improvement += 1
+            eval_loss = eval_epoch_fast(args, model, dev_loader)
+            print(f"Epoch {epoch}: Dev loss: {eval_loss} (fast eval - loss only)")
+            if args.use_wandb:
+                wandb.log({'train/loss': tr_loss, 'dev/loss': eval_loss}, step=epoch)
 
         save_model(checkpoint_dir, model, best=False)
-        if epochs_since_improvement == 0:
+        if do_full_eval and epochs_since_improvement == 0:
             save_model(checkpoint_dir, model, best=True)
 
-        if epochs_since_improvement >= args.patience_epochs:
+        if do_full_eval and epochs_since_improvement >= args.patience_epochs:
             break
 
 def train_epoch(args, model, train_loader, optimizer, scheduler):
@@ -178,6 +199,30 @@ def train_epoch(args, model, train_loader, optimizer, scheduler):
             total_tokens += num_tokens
 
     return total_loss / total_tokens
+
+def eval_epoch_fast(args, model, dev_loader):
+    """Fast evaluation: compute loss only, skip generation."""
+    model.eval()
+    total_loss = 0
+    total_tokens = 0
+    criterion = nn.CrossEntropyLoss()
+    
+    with torch.no_grad():
+        for encoder_input, encoder_mask, decoder_input, decoder_targets, _ in tqdm(dev_loader):
+            encoder_input = encoder_input.to(DEVICE)
+            encoder_mask = encoder_mask.to(DEVICE)
+            decoder_input = decoder_input.to(DEVICE)
+            decoder_targets = decoder_targets.to(DEVICE)
+            
+            logits = model(input_ids=encoder_input, attention_mask=encoder_mask, 
+                          decoder_input_ids=decoder_input)['logits']
+            non_pad = decoder_targets != PAD_IDX
+            loss = criterion(logits[non_pad], decoder_targets[non_pad])
+            
+            total_loss += loss.item() * torch.sum(non_pad).item()
+            total_tokens += torch.sum(non_pad).item()
+    
+    return total_loss / total_tokens if total_tokens > 0 else 0
         
 def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_path, model_record_path):
     '''
@@ -291,7 +336,17 @@ def main():
 
     # Load the data and the model
     train_loader, dev_loader, test_loader = load_t5_data(args.batch_size, args.test_batch_size, args.num_workers)
-    model = initialize_model(args)
+    
+    # Resume from checkpoint or initialize new model
+    if args.resume_from_checkpoint:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        args.checkpoint_dir = args.resume_from_checkpoint
+        model = load_model_from_checkpoint(args, best=False)
+        print(f"Resumed from checkpoint: {args.resume_from_checkpoint}")
+    else:
+        model = initialize_model(args)
+    
     optimizer, scheduler = initialize_optimizer_and_scheduler(args, model, len(train_loader))
     
     # Print training configuration
@@ -319,7 +374,7 @@ def main():
     model.eval()
     
     # Dev set
-    experiment_name = 'ft_experiment'
+    experiment_name = args.experiment_name or 'ft_experiment'
     model_type = 'ft' if args.finetune else 'scr'
     gt_sql_path = os.path.join(f'data/dev.sql')
     gt_record_path = os.path.join(f'records/ground_truth_dev.pkl')

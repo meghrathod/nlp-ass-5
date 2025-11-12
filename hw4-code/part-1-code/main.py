@@ -134,7 +134,38 @@ def create_augmented_dataloader(args, dataset):
     # dataloader will be for the original training split augmented with 5k random transformed examples from the training set.
     # You may find it helpful to see how the dataloader was created at other place in this code.
 
-    raise NotImplementedError
+    # Get original training split
+    train_dataset = dataset["train"]
+    
+    # Sample 5k random examples and transform them
+    random_samples = train_dataset.shuffle(seed=42).select(range(5000))
+    transformed_samples = random_samples.map(custom_transform, load_from_cache_file=False)
+    
+    # Concatenate original training set with transformed samples
+    from datasets import concatenate_datasets
+    augmented_dataset = concatenate_datasets([train_dataset, transformed_samples])
+    
+    # Tokenize the augmented dataset
+    augmented_tokenized = augmented_dataset.map(tokenize_function, batched=True, load_from_cache_file=False)
+    
+    # Prepare for model (same as regular training)
+    augmented_tokenized = augmented_tokenized.remove_columns(["text"])
+    augmented_tokenized = augmented_tokenized.rename_column("label", "labels")
+    augmented_tokenized.set_format("torch")
+    
+    # Create dataloader with same optimizations as regular training
+    pin_memory = torch.cuda.is_available()
+    dataloader_kwargs = {
+        'batch_size': args.batch_size,
+        'num_workers': args.num_workers,
+        'pin_memory': pin_memory,
+        'persistent_workers': args.num_workers > 0,
+    }
+    
+    train_dataloader = DataLoader(augmented_tokenized, shuffle=True, **dataloader_kwargs)
+    
+    print(f"Augmented training dataset: {len(augmented_dataset)} examples (original: {len(train_dataset)}, transformed: 5000)")
+    print(f"Augmented dataloader length: {len(train_dataloader)}")
 
     ##### YOUR CODE ENDS HERE ######
 
