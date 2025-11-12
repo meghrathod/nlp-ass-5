@@ -1,0 +1,136 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+conda-env/
+
+# PyTorch / Model Checkpoints
+*.pt
+*.pth
+*.pkl
+*.safetensors
+checkpoints/
+*.ckpt
+*.h5
+*.hdf5
+
+# Model Output Directories
+out/
+outputs/
+models/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# LaTeX auxiliary files
+*.aux
+*.log
+*.out
+*.toc
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+*.bbl
+*.blg
+*.bcf
+*.run.xml
+*.auxlock
+
+# LaTeX output (keep source files, ignore compiled PDFs if you want)
+# Uncomment the next line if you don't want to track PDFs
+# *.pdf
+
+# NLTK Data (large directory, downloaded automatically)
+nltk_data/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Experiment Tracking
+wandb/
+.wandb/
+mlruns/
+.neptune/
+
+# Results and Records (keep structure, ignore generated files)
+# Uncomment if you want to ignore all results/records
+# hw4-code/part-2-code/results/*
+# hw4-code/part-2-code/records/*
+# But keep ground truth files
+!hw4-code/part-2-code/records/ground_truth_*.pkl
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Hugging Face cache (optional - uncomment if you don't want to track HF cache)
+# .cache/
+# .huggingface/
+
+.cursor/
+.lightning_studio/
+.triton/
+
+.*-server
+.bash_history

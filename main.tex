@@ -1,0 +1,282 @@
+\documentclass{article}
+
+\input{header}
+
+\title{DSGA 1011: Assignment 4}
+
+\author{Full Name \\ Net ID}
+
+\date{}
+
+
+\colmfinalcopy
+\begin{document}
+\maketitle
+% \section*{Part I. Q1} No written element, submit \texttt{out\_original.txt}  to autograder.
+\section*{Q0. 1.}
+Please provide a link to your github repository, which contains the code for both Part I and Part II. \textcolor{gray}{TODO}
+\section*{Q2. 1.}
+Describe your transformation of dataset.
+
+Our transformation strategy creates out-of-distribution (OOD) evaluation data by applying multiple realistic text modifications that preserve semantic meaning and sentiment labels. The transformation uses a multi-stage approach combining synonym replacement, verb tense changes, contraction expansion/contraction, and controlled typographical errors.
+
+\subsection*{Transformation Components}
+
+\textbf{1. Synonym Replacement (Two-Tier Approach):}
+We employ a two-tier synonym replacement strategy with part-of-speech (POS) based probabilities:
+\begin{itemize}
+    \item \textbf{Domain-Specific Groups (Primary):} We maintain curated synonym groups for movie review terminology, including:
+    \begin{itemize}
+        \item Movie/film terms: \texttt{\{movie, film, picture, motion picture\}}
+        \item Acting/performance: \texttt{\{acting, performance, portrayal, playing\}}
+        \item Story/narrative: \texttt{\{story, narrative, tale, plot, screenplay, script\}}
+        \item Quality adjectives: \texttt{\{good, great, excellent, fine, fantastic, outstanding\}} and \texttt{\{bad, terrible, awful, poor, horrible\}}
+        \item Common verbs/adverbs: \texttt{\{watch, see\}}, \texttt{\{very, extremely, really, quite\}}
+    \end{itemize}
+    These groups are stored as sets and automatically build bidirectional lookup dictionaries, ensuring no redundancy and easy maintenance.
+    
+    \item \textbf{WordNet Fallback:} For words not in domain groups, we query WordNet synsets using NLTK's \texttt{wordnet.synsets()} with appropriate POS tags. We filter synonyms to ensure they are alphabetic, differ from the original word, and are not duplicates.
+    
+    \item \textbf{POS-Based Probabilities:} Replacement probabilities vary by word type to balance semantic preservation with transformation aggressiveness:
+    \begin{itemize}
+        \item Adjectives: 80\% (\texttt{p\_synonym\_adj = 0.80})
+        \item Adverbs: 80\% (\texttt{p\_synonym\_adv = 0.80})
+        \item Nouns: 65\% (\texttt{p\_synonym\_noun = 0.65})
+        \item Verbs: 80\% (\texttt{p\_synonym\_verb = 0.80})
+    \end{itemize}
+    Higher probabilities for adjectives/adverbs allow semantic variation while maintaining sentiment, while verbs and nouns are transformed more conservatively to preserve core meaning.
+\end{itemize}
+
+\textbf{2. Verb Tense Changes:}
+With probability 75\% (\texttt{p\_tense\_change = 0.75}), we change verb tenses using a comprehensive mapping dictionary covering common verb forms (e.g., present $\leftrightarrow$ past: \texttt{is $\leftrightarrow$ was}, \texttt{goes $\leftrightarrow$ went}, \texttt{watches $\leftrightarrow$ watched}). This introduces temporal variation while preserving semantic content.
+
+\textbf{3. Contraction Expansion/Contraction:}
+With probability 20\% (\texttt{p\_contraction = 0.20}), we randomly expand contractions (e.g., \texttt{don't} $\rightarrow$ \texttt{do not}) or contract expanded forms (e.g., \texttt{I am} $\rightarrow$ \texttt{I'm}). This simulates natural language variation in formality and style.
+
+\textbf{4. Controlled Typographical Errors:}
+We introduce realistic typing errors using QWERTY keyboard proximity simulation:
+\begin{itemize}
+    \item Probability: 40\% per eligible word (\texttt{p\_typo = 0.40})
+    \item Maximum: 10 typos per example (\texttt{max\_typos\_per\_example = 10})
+    \item Method: For words longer than 3 characters, we randomly select a character position (excluding first and last) and replace it with a nearby QWERTY key. For example, \texttt{a} can be replaced by \texttt{s}, \texttt{q}, \texttt{w}, or \texttt{e}; \texttt{e} by \texttt{w}, \texttt{r}, \texttt{d}, or \texttt{s}.
+    \item Constraint: Typos are only introduced if the word was not already transformed by synonym replacement, ensuring transformations don't compound.
+\end{itemize}
+
+\subsection*{Implementation Details}
+
+The transformation pipeline processes text as follows:
+\begin{enumerate}
+    \item \textbf{Tokenization:} Use NLTK's \texttt{word\_tokenize()} to preserve sentence structure
+    \item \textbf{POS Tagging:} Tag tokens with NLTK's \texttt{pos\_tag()} to identify word types
+    \item \textbf{Transformation Stages:} Apply transformations in order: (1) contraction handling, (2) synonym replacement (domain groups then WordNet), (3) verb tense changes, (4) typo introduction
+    \item \textbf{Capitalization Preservation:} All replacements maintain the original word's capitalization pattern (uppercase, lowercase, title case)
+    \item \textbf{Detokenization:} Reconstruct sentences using \texttt{TreebankWordDetokenizer()} to restore natural spacing and punctuation
+\end{enumerate}
+
+\subsection*{Why This Transformation is Reasonable}
+
+\begin{itemize}
+    \item \textbf{Realistic Variations:} Synonym usage, tense changes, contractions, and typos all occur naturally in user-generated content, especially in informal movie reviews.
+    \item \textbf{Preserves Semantics:} All transformations maintain the core meaning and sentiment of the original text, ensuring labels remain valid.
+    \item \textbf{Appropriate Complexity:} The transformation is non-trivial (requires semantic understanding) but not extreme (text remains readable and interpretable).
+    \item \textbf{Test-Time Plausibility:} These variations are commonly observed in real-world test scenarios, making the OOD evaluation meaningful.
+\end{itemize}
+
+\subsection*{Example Transformation}
+
+\textbf{Original:} ``Titanic is the best movie I have ever seen. The acting was excellent and the story was compelling.''
+
+\textbf{Transformed:} ``Titanic was the finest film I have ever seen. The performance was outstanding and the narrative was compelling.''
+
+\textbf{Changes:} \texttt{is} $\rightarrow$ \texttt{was} (tense), \texttt{best} $\rightarrow$ \texttt{finest} (synonym), \texttt{movie} $\rightarrow$ \texttt{film} (domain group), \texttt{acting} $\rightarrow$ \texttt{performance} (domain group), \texttt{excellent} $\rightarrow$ \texttt{outstanding} (domain group), \texttt{story} $\rightarrow$ \texttt{narrative} (domain group).
+% \section*{Part I. Q2. 2. No written element, submit \texttt{out\_transformed.txt} to autograder. }
+\section*{Q3. 1}
+\textbf{Report \& Analysis}
+
+\subsection*{Accuracy Results}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Model & Original Test Set & Transformed Test Set \\
+\midrule
+Baseline (no augmentation) & \textcolor{gray}{XX.XX\%} & \textcolor{gray}{XX.XX\%} \\
+With data augmentation & \textcolor{gray}{XX.XX\%} & \textcolor{gray}{XX.XX\%} \\
+\bottomrule
+\end{tabular}
+\caption{Accuracy on original and transformed test sets.}
+\label{tab:accuracy_results}
+\end{table}
+
+\textit{Note: Replace \textcolor{gray}{XX.XX\%} with actual accuracy values after running evaluations.}
+
+\subsection*{Analysis and Discussion}
+
+\textbf{(1) Model Performance on Transformed Test Data After Augmentation:}
+
+After applying data augmentation during training, the model's performance on the transformed test data \textcolor{gray}{[improved/decreased/remained similar]} from \textcolor{gray}{XX.XX\%} to \textcolor{gray}{XX.XX\%}. This suggests that \textcolor{gray}{[the augmentation strategy successfully exposed the model to similar transformations during training, improving robustness / the augmentation was insufficient or introduced noise that hindered learning / etc.]}.
+
+\textbf{(2) Impact of Data Augmentation on Original Test Data:}
+
+Data augmentation \textcolor{gray}{[enhanced/diminished]} the model's performance on the original test set from \textcolor{gray}{XX.XX\%} to \textcolor{gray}{XX.XX\%}. This indicates that \textcolor{gray}{[the augmented training data helped the model learn more generalizable features that also benefit performance on standard test data / the augmentation introduced distribution shift that hurt performance on the original distribution / etc.]}.
+
+\subsection*{Intuitive Explanation}
+
+The observed results can be explained by considering how data augmentation affects model training:
+
+\begin{itemize}
+    \item \textbf{Improved OOD Robustness:} When the model is trained on augmented data that includes synonym replacements, tense changes, contractions, and typos, it learns to focus on semantic patterns rather than memorizing specific lexical choices. This makes it more robust to the lexical variations present in the transformed test set.
+    
+    \item \textbf{Regularization Effect:} The augmented training examples act as a form of regularization, preventing the model from overfitting to exact word sequences and encouraging it to learn more generalizable representations.
+    
+    \item \textbf{Trade-off with Original Distribution:} If augmentation is too aggressive or introduces patterns not present in the original distribution, it may hurt performance on the original test set. Conversely, if augmentation is well-calibrated, it can improve generalization to both original and transformed data.
+    
+    \item \textbf{Semantic Preservation:} Since our transformations preserve semantic meaning and sentiment, the model learns that different surface forms can express the same underlying sentiment, improving its ability to handle natural language variation.
+\end{itemize}
+
+\subsection*{Limitation of the Data Augmentation Approach}
+
+One key limitation of this data augmentation approach for improving OOD performance is that it only addresses \textbf{lexical and surface-level variations} (synonyms, typos, contractions, tense changes) but does not handle \textbf{semantic or structural distribution shifts}. For example:
+
+\begin{itemize}
+    \item The augmentation cannot help with domain shifts where the underlying sentiment indicators change (e.g., reviews from a different genre or cultural context where ``dark'' might be positive rather than negative).
+    
+    \item It does not address cases where the transformation introduces subtle semantic shifts that our heuristics fail to detect, potentially creating label noise.
+    
+    \item The approach assumes that synonym replacement and other transformations perfectly preserve sentiment, which may not always hold true in practice (e.g., ``terrible'' vs. ``poor'' may have different intensity levels).
+    
+    \item The augmentation is limited to transformations we can programmatically define, missing more complex linguistic variations like paraphrasing, style changes, or discourse-level modifications that occur in real OOD scenarios.
+\end{itemize}
+
+To truly improve OOD robustness, we would need to combine lexical augmentation with other techniques such as adversarial training, domain adaptation, or learning from diverse data sources that capture broader distribution shifts.
+\section*{Part II. Q4}
+% 
+% \section{Data Statistics and Processing (8pt)}
+
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Statistics Name & Train & Dev \\
+\midrule
+Number of examples & 4225 & 466 \\
+Mean sentence length & 10.96 & 10.91 \\
+Mean SQL query length & 60.90 & 58.90  \\
+Vocabulary size (natural language)& 868 & 444  \\
+Vocabulary size (SQL)& 644 & 393  \\
+\bottomrule
+\end{tabular}
+\caption{Data statistics before any pre-processing.}
+\label{tab:data_stats_before}
+\end{table}
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lcc}
+\toprule
+Statistics Name & Train & Dev \\
+\midrule
+\multicolumn{3}{l}{\textbf{T5 fine-tuned model}} \\
+Mean sentence length (tokens) & 17.10 & 17.07 \\
+Mean SQL query length (tokens) & 216.37 & 210.05 \\
+Vocabulary size (natural language, token IDs) & 791 & 465 \\
+Vocabulary size (SQL, token IDs) & 555 & 395 \\
+\bottomrule
+\end{tabular}
+\caption{Data statistics after pre-processing.}
+\label{tab:data_stats_after}
+\end{table}
+
+
+
+\newpage
+
+
+
+
+\section*{Q5}\label{sec:t5}
+
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{p{3.5cm}p{10cm}}
+\toprule
+Design choice & Description \\
+\midrule
+Data processing & \textcolor{gray}{Describe the data processing steps you undertook, if any.} \\
+Tokenization & \textcolor{gray}{Describe how you did the tokenization for the inputs to the encoder and decoder. If you use anything else than the default T5 tokenizer, specify what you use, and why you choose to use it.} \\
+Architecture & \textcolor{gray}{Describe the components in the T5 architecture that you chose to fine-tune. Did you fine-tune the entire model, specific layers?} \\
+Hyperparameters & \textcolor{gray}{List the key hyperparameters that you used, including the learning rate, batch size, and stopping criteria.} \\
+\bottomrule
+\end{tabular}
+\caption{Details of the best-performing T5 model configurations (fine-tuned)}
+\label{tab:t5_results_ft}
+\end{table}
+
+
+
+
+
+
+
+\section*{Q6. }
+
+\paragraph{Quantitative Results:} 
+\begin{table}[h!]
+\centering
+\begin{tabular}{lcc}
+  \toprule
+  System & Query EM & F1 score\\
+  \midrule
+  \multicolumn{3}{l}{\textbf{Dev Results}} \\
+  \midrule
+  
+  \multicolumn{3}{l}{\textbf{T5 fine-tuned}} \\
+  Full model & XX.XX & XX.XX \\[5pt]
+  % Variant1 & XX.XX & XX.XX \\
+  % Variant2 & XX.XX & XX.XX \\
+  % Variant3 & XX.XX & XX.XX \\
+  
+  \midrule
+  \multicolumn{3}{l}{\textbf{Test Results}} \\
+  \midrule
+  T5 fine-tuning & XX.XX & XX.XX \\
+  \bottomrule
+\end{tabular}  
+\caption{Development and test results. \textcolor{gray}{Use this table to report quantitative results for both dev and test results.}}
+\label{tab:results}
+\end{table}
+
+
+\paragraph{Qualitative Error Analysis:} 
+
+
+\begin{landscape}
+\begin{table}
+  \centering
+  \begin{tabular}{p{2cm}p{6cm}p{6cm}p{6cm}}
+    \toprule
+    \textbf{Error Type}& \textbf{Example Of Error} & \textbf{Error Description} & \textbf{Statistics} \\
+    \midrule
+    \textcolor{gray}{Error name}  & \textcolor{gray}{Snippet from datapoint examplifying error} & \textcolor{gray}{Describe the error in natural language} & \textcolor{gray}{Provide statistics in the form ``COUNT/TOTAL'' on the prevalence of the error. TOTAL is the number of relevant examples (e.g. number of queries, for query-level error), and COUNT is the number of examples that showed this error.}  \\
+    
+    \midrule
+    &  &   & \\
+    \bottomrule
+  \end{tabular}
+  \caption{Use this table for your qualitative analysis on the dev set.}\label{tab:qualitative}
+\end{table}
+\end{landscape}
+
+\section*{Q7.}
+
+Provide a link to a google drive which contains a model checkpoint used to generate outputs you have submitted. 
+\textcolor{gray}{TODO}
+
+\section*{Extra Credit: }
+
+If you are doing extra credit assignment, please describe your system here, as well as provide a link to a google drive which contains a model checkpoint used to generate outputs you have submitted. 
+\textcolor{gray}{Optional TODO}
+\end{document}
