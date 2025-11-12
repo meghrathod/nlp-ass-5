@@ -11,12 +11,7 @@ DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cp
 
 def setup_wandb(args):
     # Implement this if you wish to use wandb in your experiments
-    if args.use_wandb:
-        wandb.init(
-            project="t5-sql-generation",
-            name=args.experiment_name,
-            config=vars(args)
-        )
+    wandb.init(project="t5-nl2sql", name=args.experiment_name, config=vars(args))
 
 def initialize_model(args):
     '''
@@ -26,14 +21,28 @@ def initialize_model(args):
     from scratch.
     '''
     if args.finetune:
-        # Fine-tune the pretrained T5 model
+        # Load pretrained T5-small model
         model = T5ForConditionalGeneration.from_pretrained('google-t5/t5-small')
     else:
-        # Train from scratch using T5 config
+        # Initialize model from scratch with T5-small config
         config = T5Config.from_pretrained('google-t5/t5-small')
         model = T5ForConditionalGeneration(config)
     
+    # Enable gradient checkpointing to save memory
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+        print("Gradient checkpointing enabled")
+    
     model = model.to(DEVICE)
+    
+    # Compile model for faster training (PyTorch 2.0+)
+    if args.compile_model:
+        try:
+            model = torch.compile(model)
+            print("Model compiled with torch.compile")
+        except Exception as e:
+            print(f"Warning: torch.compile failed ({e}), continuing without compilation")
+    
     return model
 
 def mkdir(dirpath):
@@ -46,38 +55,26 @@ def mkdir(dirpath):
 def save_model(checkpoint_dir, model, best):
     # Save model checkpoint to be able to load the model later
     mkdir(checkpoint_dir)
-    if best:
-        checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
-    else:
-        checkpoint_path = os.path.join(checkpoint_dir, 'latest_model.pt')
     
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'model_config': model.config,
-    }, checkpoint_path)
+    if best:
+        save_path = os.path.join(checkpoint_dir, 'best_model.pt')
+    else:
+        save_path = os.path.join(checkpoint_dir, 'latest_model.pt')
+    
+    torch.save(model.state_dict(), save_path)
 
 def load_model_from_checkpoint(args, best):
     # Load model from a checkpoint
-    checkpoint_dir = args.checkpoint_dir
+    model = initialize_model(args)
+    
     if best:
-        checkpoint_path = os.path.join(checkpoint_dir, 'best_model.pt')
+        load_path = os.path.join(args.checkpoint_dir, 'best_model.pt')
     else:
-        checkpoint_path = os.path.join(checkpoint_dir, 'latest_model.pt')
+        load_path = os.path.join(args.checkpoint_dir, 'latest_model.pt')
     
-    if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f"Checkpoint not found at {checkpoint_path}")
-    
-    checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
-    
-    # Initialize model
-    if args.finetune:
-        model = T5ForConditionalGeneration.from_pretrained('google-t5/t5-small')
-    else:
-        config = checkpoint.get('model_config', T5Config.from_pretrained('google-t5/t5-small'))
-        model = T5ForConditionalGeneration(config)
-    
-    model.load_state_dict(checkpoint['model_state_dict'])
+    model.load_state_dict(torch.load(load_path, map_location=DEVICE))
     model = model.to(DEVICE)
+    
     return model
 
 def initialize_optimizer_and_scheduler(args, model, epoch_length):

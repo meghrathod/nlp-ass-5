@@ -7,12 +7,15 @@ import torch.nn as nn
 import numpy as np
 import wandb
 
-from t5_utils import initialize_model, initialize_optimizer_and_scheduler, save_model, load_model_from_checkpoint, setup_wandb, DEVICE
+# Disable tokenizers parallelism warning when using DataLoader with num_workers > 0
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+from t5_utils import initialize_model, initialize_optimizer_and_scheduler, save_model, load_model_from_checkpoint, setup_wandb
 from transformers import GenerationConfig
 from load_data import load_t5_data
 from utils import compute_metrics, save_queries_and_records
-from transformers import T5TokenizerFast
 
+DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 PAD_IDX = 0
 
 def get_args():
@@ -23,6 +26,8 @@ def get_args():
 
     # Model hyperparameters
     parser.add_argument('--finetune', action='store_true', help="Whether to finetune T5 or not")
+    parser.add_argument('--gradient_checkpointing', action='store_true', 
+                        help="Enable gradient checkpointing to save memory")
     
     # Training hyperparameters
     parser.add_argument('--optimizer_type', type=str, default="AdamW", choices=["AdamW"],
@@ -47,6 +52,18 @@ def get_args():
     # Data hyperparameters
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--test_batch_size', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help="Number of DataLoader workers for faster data loading")
+    
+    # Speed optimization hyperparameters
+    parser.add_argument('--mixed_precision', action='store_true',
+                        help="Use mixed precision training (FP16) for faster training on modern GPUs")
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+                        help="Number of gradient accumulation steps (effective_batch_size = batch_size * accumulation_steps)")
+    parser.add_argument('--eval_beam_size', type=int, default=5,
+                        help="Beam size for evaluation generation (reduce for faster eval)")
+    parser.add_argument('--compile_model', action='store_true',
+                        help="Use torch.compile for faster training (requires PyTorch 2.0+)")
 
     args = parser.parse_args()
     return args
@@ -61,7 +78,7 @@ def train(args, model, train_loader, dev_loader, optimizer, scheduler):
     args.checkpoint_dir = checkpoint_dir
     experiment_name = 'ft_experiment'
     gt_sql_path = os.path.join(f'data/dev.sql')
-    gt_record_path = os.path.join(f'records/dev_gt_records.pkl')
+    gt_record_path = os.path.join(f'records/ground_truth_dev.pkl')
     model_sql_path = os.path.join(f'results/t5_{model_type}_{experiment_name}_dev.sql')
     model_record_path = os.path.join(f'records/t5_{model_type}_{experiment_name}_dev.pkl')
     for epoch in range(args.max_n_epochs):
@@ -103,45 +120,61 @@ def train_epoch(args, model, train_loader, optimizer, scheduler):
     total_loss = 0
     total_tokens = 0
     criterion = nn.CrossEntropyLoss()
-
-    for encoder_input, encoder_mask, decoder_input, decoder_targets, _ in tqdm(train_loader):
-        optimizer.zero_grad()
+    
+    # Initialize mixed precision scaler if enabled
+    scaler = torch.amp.GradScaler('cuda') if args.mixed_precision else None
+    
+    # Gradient accumulation setup
+    optimizer.zero_grad()
+    
+    for batch_idx, (encoder_input, encoder_mask, decoder_input, decoder_targets, _) in enumerate(tqdm(train_loader)):
         encoder_input = encoder_input.to(DEVICE)
         encoder_mask = encoder_mask.to(DEVICE)
         decoder_input = decoder_input.to(DEVICE)
         decoder_targets = decoder_targets.to(DEVICE)
 
-        logits = model(
-            input_ids=encoder_input,
-            attention_mask=encoder_mask,
-            decoder_input_ids=decoder_input,
-        )['logits']
-
-        # In T5, logits[i] predicts the token at position i+1 in decoder_input_ids
-        # So we need to shift targets: targets[i] = decoder_input_ids[i+1]
-        # We'll use decoder_input[:, 1:] as targets, but need to handle padding
-        # Actually, we can use decoder_targets but shift the alignment
-        # The logits shape is [batch, seq_len, vocab] where seq_len = decoder_input.shape[1]
-        # We want to predict decoder_input[:, 1:] from logits[:, :-1, :]
+        # Mixed precision training
+        if args.mixed_precision:
+            with torch.amp.autocast('cuda'):
+                logits = model(
+                    input_ids=encoder_input,
+                    attention_mask=encoder_mask,
+                    decoder_input_ids=decoder_input,
+                )['logits']
+                
+                non_pad = decoder_targets != PAD_IDX
+                loss = criterion(logits[non_pad], decoder_targets[non_pad])
+                loss = loss / args.gradient_accumulation_steps  # Scale loss for gradient accumulation
+            
+            scaler.scale(loss).backward()
+        else:
+            logits = model(
+                input_ids=encoder_input,
+                attention_mask=encoder_mask,
+                decoder_input_ids=decoder_input,
+            )['logits']
+            
+            non_pad = decoder_targets != PAD_IDX
+            loss = criterion(logits[non_pad], decoder_targets[non_pad])
+            loss = loss / args.gradient_accumulation_steps  # Scale loss for gradient accumulation
+            loss.backward()
         
-        # Shift targets: use decoder_input starting from position 1
-        shifted_targets = decoder_input[:, 1:].contiguous()
-        shifted_logits = logits[:, :-1, :].contiguous()
-        
-        # Flatten for loss computation
-        shifted_logits = shifted_logits.view(-1, shifted_logits.size(-1))
-        shifted_targets = shifted_targets.view(-1)
-        
-        non_pad = shifted_targets != PAD_IDX
-        loss = criterion(shifted_logits[non_pad], shifted_targets[non_pad])
-        loss.backward()
-        optimizer.step()
-        if scheduler is not None: 
-            scheduler.step()
+        # Update weights after accumulation steps
+        if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+            if args.mixed_precision:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            
+            optimizer.zero_grad()
+            
+            if scheduler is not None:
+                scheduler.step()
 
         with torch.no_grad():
             num_tokens = torch.sum(non_pad).item()
-            total_loss += loss.item() * num_tokens
+            total_loss += loss.item() * num_tokens * args.gradient_accumulation_steps  # Unscale for logging
             total_tokens += num_tokens
 
     return total_loss / total_tokens
@@ -157,15 +190,17 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
     we found the cross-entropy loss (in the evaluation set) to be well (albeit imperfectly) correlated with F1 performance.
     '''
     model.eval()
-    tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
-    criterion = nn.CrossEntropyLoss()
-    
     total_loss = 0
     total_tokens = 0
-    generated_sql_queries = []
+    criterion = nn.CrossEntropyLoss()
+    
+    all_generated_sql = []
+    
+    from transformers import T5TokenizerFast
+    tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
     
     with torch.no_grad():
-        for encoder_input, encoder_mask, decoder_input, decoder_targets, _ in tqdm(dev_loader, desc="Evaluating"):
+        for encoder_input, encoder_mask, decoder_input, decoder_targets, initial_decoder_input in tqdm(dev_loader):
             encoder_input = encoder_input.to(DEVICE)
             encoder_mask = encoder_mask.to(DEVICE)
             decoder_input = decoder_input.to(DEVICE)
@@ -178,54 +213,39 @@ def eval_epoch(args, model, dev_loader, gt_sql_pth, model_sql_path, gt_record_pa
                 decoder_input_ids=decoder_input,
             )['logits']
             
-            # Shift targets for alignment (same as in training)
-            shifted_targets = decoder_input[:, 1:].contiguous()
-            shifted_logits = logits[:, :-1, :].contiguous()
-            
-            # Flatten for loss computation
-            shifted_logits = shifted_logits.view(-1, shifted_logits.size(-1))
-            shifted_targets = shifted_targets.view(-1)
-            
-            non_pad = shifted_targets != PAD_IDX
-            loss = criterion(shifted_logits[non_pad], shifted_targets[non_pad])
+            non_pad = decoder_targets != PAD_IDX
+            loss = criterion(logits[non_pad], decoder_targets[non_pad])
             
             num_tokens = torch.sum(non_pad).item()
             total_loss += loss.item() * num_tokens
             total_tokens += num_tokens
             
             # Generate SQL queries
-            generation_config = GenerationConfig(
-                max_length=512,
-                num_beams=1,  # Greedy decoding
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
-            
-            generated = model.generate(
+            generated_ids = model.generate(
                 input_ids=encoder_input,
                 attention_mask=encoder_mask,
-                generation_config=generation_config,
+                max_length=512,
+                num_beams=args.eval_beam_size,
+                early_stopping=True
             )
             
-            # Decode generated sequences
-            for gen_seq in generated:
-                sql_query = tokenizer.decode(gen_seq, skip_special_tokens=True)
-                generated_sql_queries.append(sql_query)
+            # Decode generated SQL
+            for gen_ids in generated_ids:
+                sql_query = tokenizer.decode(gen_ids, skip_special_tokens=True)
+                all_generated_sql.append(sql_query)
     
-    # Save generated queries and records
-    save_queries_and_records(generated_sql_queries, model_sql_path, model_record_path)
+    # Save generated queries and compute records
+    save_queries_and_records(all_generated_sql, model_sql_path, model_record_path)
     
     # Compute metrics
     sql_em, record_em, record_f1, error_msgs = compute_metrics(
         gt_sql_pth, model_sql_path, gt_record_path, model_record_path
     )
     
-    # Compute error rate (percentage of queries that led to SQL errors)
-    error_count = sum(1 for msg in error_msgs if msg != "")
-    error_rate = error_count / len(error_msgs) if len(error_msgs) > 0 else 0.0
+    # Calculate error rate
+    error_rate = sum(1 for msg in error_msgs if msg != "") / len(error_msgs)
     
-    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0
     
     return avg_loss, record_f1, record_em, sql_em, error_rate
         
@@ -235,37 +255,32 @@ def test_inference(args, model, test_loader, model_sql_path, model_record_path):
     database records. Implementation should be very similar to eval_epoch.
     '''
     model.eval()
+    all_generated_sql = []
+    
+    from transformers import T5TokenizerFast
     tokenizer = T5TokenizerFast.from_pretrained('google-t5/t5-small')
-    generated_sql_queries = []
     
     with torch.no_grad():
-        for encoder_input, encoder_mask, _ in tqdm(test_loader, desc="Testing"):
+        for encoder_input, encoder_mask, initial_decoder_input in tqdm(test_loader):
             encoder_input = encoder_input.to(DEVICE)
             encoder_mask = encoder_mask.to(DEVICE)
             
-            # Generate SQL queries
-            generation_config = GenerationConfig(
-                max_length=512,
-                num_beams=1,  # Greedy decoding
-                do_sample=False,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
-            
-            generated = model.generate(
+            # Generate SQL queries (use beam size 5 for final test set for best quality)
+            generated_ids = model.generate(
                 input_ids=encoder_input,
                 attention_mask=encoder_mask,
-                generation_config=generation_config,
+                max_length=512,
+                num_beams=5,  # Always use 5 for test set for best quality
+                early_stopping=True
             )
             
-            # Decode generated sequences
-            for gen_seq in generated:
-                sql_query = tokenizer.decode(gen_seq, skip_special_tokens=True)
-                generated_sql_queries.append(sql_query)
+            # Decode generated SQL
+            for gen_ids in generated_ids:
+                sql_query = tokenizer.decode(gen_ids, skip_special_tokens=True)
+                all_generated_sql.append(sql_query)
     
-    # Save generated queries and records
-    save_queries_and_records(generated_sql_queries, model_sql_path, model_record_path)
-    print(f"Saved {len(generated_sql_queries)} SQL queries to {model_sql_path}")
+    # Save generated queries and compute records
+    save_queries_and_records(all_generated_sql, model_sql_path, model_record_path)
 
 def main():
     # Get key arguments
@@ -275,9 +290,26 @@ def main():
         setup_wandb(args)
 
     # Load the data and the model
-    train_loader, dev_loader, test_loader = load_t5_data(args.batch_size, args.test_batch_size)
+    train_loader, dev_loader, test_loader = load_t5_data(args.batch_size, args.test_batch_size, args.num_workers)
     model = initialize_model(args)
     optimizer, scheduler = initialize_optimizer_and_scheduler(args, model, len(train_loader))
+    
+    # Print training configuration
+    print(f"\n{'='*60}")
+    print(f"Training Configuration:")
+    print(f"  Finetune: {args.finetune}")
+    print(f"  Batch size: {args.batch_size}")
+    print(f"  Gradient accumulation steps: {args.gradient_accumulation_steps}")
+    print(f"  Effective batch size: {args.batch_size * args.gradient_accumulation_steps}")
+    print(f"  Mixed precision: {args.mixed_precision}")
+    print(f"  Gradient checkpointing: {args.gradient_checkpointing}")
+    print(f"  Compile model: {args.compile_model}")
+    print(f"  Num workers: {args.num_workers}")
+    print(f"  Eval beam size: {args.eval_beam_size}")
+    print(f"  Learning rate: {args.learning_rate}")
+    print(f"  Max epochs: {args.max_n_epochs}")
+    print(f"  Device: {DEVICE}")
+    print(f"{'='*60}\n")
 
     # Train 
     train(args, model, train_loader, dev_loader, optimizer, scheduler)
@@ -296,7 +328,7 @@ def main():
     dev_loss, dev_record_em, dev_record_f1, dev_sql_em, dev_error_rate = eval_epoch(args, model, dev_loader,
                                                                                     gt_sql_path, model_sql_path,
                                                                                     gt_record_path, model_record_path)
-    print(f"Dev set results: Loss: {dev_loss:.4f}, Record F1: {dev_record_f1:.4f}, Record EM: {dev_record_em:.4f}, SQL EM: {dev_sql_em:.4f}")
+    print("Dev set results: Loss: {dev_loss}, Record F1: {dev_record_f1}, Record EM: {dev_record_em}, SQL EM: {dev_sql_em}")
     print(f"Dev set results: {dev_error_rate*100:.2f}% of the generated outputs led to SQL errors")
 
     # Test set
