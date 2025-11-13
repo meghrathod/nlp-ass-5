@@ -20,14 +20,14 @@ Please provide a link to your github repository, which contains the code for bot
 \section*{Q2. 1.}
 Describe your transformation of dataset.
 
-Our transformation strategy creates out-of-distribution (OOD) evaluation data by applying multiple realistic text modifications that preserve semantic meaning and sentiment labels. The transformation uses a multi-stage approach combining synonym replacement, verb tense changes, contraction expansion/contraction, and controlled typographical errors.
+My transformation strategy creates out-of-distribution (OOD) evaluation data by applying multiple realistic text modifications that preserve semantic meaning and sentiment labels. The transformation uses a multi-stage approach combining synonym replacement, verb tense changes, contraction expansion/contraction, and controlled typographical errors.
 
 \subsection*{Transformation Components}
 
 \textbf{1. Synonym Replacement (Two-Tier Approach):}
-We employ a two-tier synonym replacement strategy with part-of-speech (POS) based probabilities:
+I employ a two-tier synonym replacement strategy with part-of-speech (POS) based probabilities:
 \begin{itemize}
-    \item \textbf{Domain-Specific Groups (Primary):} We maintain curated synonym groups for movie review terminology, including:
+    \item \textbf{Domain-Specific Groups (Primary):} I maintain curated synonym groups for movie review terminology, including:
     \begin{itemize}
         \item Movie/film terms: \texttt{\{movie, film, picture, motion picture\}}
         \item Acting/performance: \texttt{\{acting, performance, portrayal, playing\}}
@@ -37,7 +37,7 @@ We employ a two-tier synonym replacement strategy with part-of-speech (POS) base
     \end{itemize}
     These groups are stored as sets and automatically build bidirectional lookup dictionaries, ensuring no redundancy and easy maintenance.
     
-    \item \textbf{WordNet Fallback:} For words not in domain groups, we query WordNet synsets using NLTK's \texttt{wordnet.synsets()} with appropriate POS tags. We filter synonyms to ensure they are alphabetic, differ from the original word, and are not duplicates.
+    \item \textbf{WordNet Fallback:} For words not in domain groups, I query WordNet synsets using NLTK's \texttt{wordnet.synsets()} with appropriate POS tags. I filter synonyms to ensure they are alphabetic, differ from the original word, and are not duplicates.
     
     \item \textbf{POS-Based Probabilities:} Replacement probabilities vary by word type to balance semantic preservation with transformation aggressiveness:
     \begin{itemize}
@@ -50,17 +50,17 @@ We employ a two-tier synonym replacement strategy with part-of-speech (POS) base
 \end{itemize}
 
 \textbf{2. Verb Tense Changes:}
-With probability 75\% (\texttt{p\_tense\_change = 0.75}), we change verb tenses using a comprehensive mapping dictionary covering common verb forms (e.g., present $\leftrightarrow$ past: \texttt{is $\leftrightarrow$ was}, \texttt{goes $\leftrightarrow$ went}, \texttt{watches $\leftrightarrow$ watched}). This introduces temporal variation while preserving semantic content.
+With probability 75\% (\texttt{p\_tense\_change = 0.75}), I change verb tenses using a comprehensive mapping dictionary covering common verb forms (e.g., present $\leftrightarrow$ past: \texttt{is $\leftrightarrow$ was}, \texttt{goes $\leftrightarrow$ went}, \texttt{watches $\leftrightarrow$ watched}). This introduces temporal variation while preserving semantic content.
 
 \textbf{3. Contraction Expansion/Contraction:}
-With probability 20\% (\texttt{p\_contraction = 0.20}), we randomly expand contractions (e.g., \texttt{don't} $\rightarrow$ \texttt{do not}) or contract expanded forms (e.g., \texttt{I am} $\rightarrow$ \texttt{I'm}). This simulates natural language variation in formality and style.
+With probability 20\% (\texttt{p\_contraction = 0.20}), I randomly expand contractions (e.g., \texttt{don't} $\rightarrow$ \texttt{do not}) or contract expanded forms (e.g., \texttt{I am} $\rightarrow$ \texttt{I'm}). This simulates natural language variation in formality and style.
 
 \textbf{4. Controlled Typographical Errors:}
-We introduce realistic typing errors using QWERTY keyboard proximity simulation:
+I introduce realistic typing errors using QWERTY keyboard proximity simulation:
 \begin{itemize}
     \item Probability: 40\% per eligible word (\texttt{p\_typo = 0.40})
     \item Maximum: 10 typos per example (\texttt{max\_typos\_per\_example = 10})
-    \item Method: For words longer than 3 characters, we randomly select a character position (excluding first and last) and replace it with a nearby QWERTY key. For example, \texttt{a} can be replaced by \texttt{s}, \texttt{q}, \texttt{w}, or \texttt{e}; \texttt{e} by \texttt{w}, \texttt{r}, \texttt{d}, or \texttt{s}.
+    \item Method: For words longer than 3 characters, I randomly select a character position (excluding first and last) and replace it with a nearby QWERTY key. For example, \texttt{a} can be replaced by \texttt{s}, \texttt{q}, \texttt{w}, or \texttt{e}; \texttt{e} by \texttt{w}, \texttt{r}, \texttt{d}, or \texttt{s}.
     \item Constraint: Typos are only introduced if the word was not already transformed by synonym replacement, ensuring transformations don't compound.
 \end{itemize}
 
@@ -142,14 +142,14 @@ One key limitation of this data augmentation approach for improving OOD performa
 \begin{itemize}
     \item The augmentation cannot help with domain shifts where the underlying sentiment indicators change (e.g., reviews from a different genre or cultural context where ``dark'' might be positive rather than negative).
     
-    \item It does not address cases where the transformation introduces subtle semantic shifts that our heuristics fail to detect, potentially creating label noise.
+    \item It does not address cases where the transformation introduces subtle semantic shifts that my heuristics fail to detect, potentially creating label noise.
     
     \item The approach assumes that synonym replacement and other transformations perfectly preserve sentiment, which may not always hold true in practice (e.g., ``terrible'' vs. ``poor'' may have different intensity levels).
     
-    \item The augmentation is limited to transformations we can programmatically define, missing more complex linguistic variations like paraphrasing, style changes, or discourse-level modifications that occur in real OOD scenarios.
+    \item The augmentation is limited to transformations I can programmatically define, missing more complex linguistic variations like paraphrasing, style changes, or discourse-level modifications that occur in real OOD scenarios.
 \end{itemize}
 
-To truly improve OOD robustness, we would need to combine lexical augmentation with other techniques such as adversarial training, domain adaptation, or learning from diverse data sources that capture broader distribution shifts.
+To truly improve OOD robustness, I would need to combine lexical augmentation with other techniques such as adversarial training, domain adaptation, or learning from diverse data sources that capture broader distribution shifts.
 \section*{Part II. Q4}
 % 
 % \section{Data Statistics and Processing (8pt)}
@@ -208,7 +208,7 @@ Design choice & Description \\
 \midrule
 Data processing & Natural language questions and SQL queries are loaded without additional preprocessing. The database schema is provided in the input prompt to help the model understand table/column relationships. No data augmentation was applied to the training set. \\
 \midrule
-Tokenization & We use the default T5TokenizerFast from HuggingFace (\texttt{google-t5/t5-small}). Encoder input format: ``translate English to SQL: [natural language question]''. Decoder receives teacher-forced SQL tokens during training. Maximum sequence lengths: 512 tokens for both encoder and decoder. \\
+Tokenization & I use the default T5TokenizerFast from HuggingFace (\texttt{google-t5/t5-small}). Encoder input format: ``translate English to SQL: [natural language question]''. Decoder receives teacher-forced SQL tokens during training. Maximum sequence lengths: 512 tokens for both encoder and decoder. \\
 \midrule
 Architecture & Fine-tuned the entire T5-small model (60M parameters) including both encoder and decoder layers. No layers were frozen. Gradient checkpointing was available but not used in final model (sufficient memory with batch size 32). Mixed precision (FP16) training was enabled for 2x speedup. \\
 \midrule
@@ -277,7 +277,7 @@ On L4 GPU (24GB VRAM): ~1.5 min/epoch with optimizations (mixed precision, batch
   \multicolumn{3}{l}{\textbf{Best Model Results}} \\
   \midrule
   Development set (Phase 2, Epoch 2) & 56.44 & 63.93 \\
-  Test set (Autograder) & -- & 58.99 \\
+  Test set (Autograder) & 51.85 & 58.99 \\
   \bottomrule
 \end{tabular}  
 \caption{Development and test set results. Phase 1: LR=5e-5 with cosine scheduling achieved 36.66\% F1. Phase 2: Ultra-low constant LR=2e-6 (critical discovery) achieved 63.93\% F1 on dev set. Test set F1 (autograder): 58.99\%. The 5\% performance gap between dev and test suggests some overfitting to dev set or slight distribution shift. Note: Record-based metrics focus on database query result accuracy rather than SQL syntax matching.}
@@ -322,10 +322,6 @@ Provide a link to a google drive which contains a model checkpoint used to gener
 
 \url{https://drive.google.com/file/d/1q8lVyqCE7kEfqCZLsR19WJ-sOQD62IXa/view?usp=sharing}
 
-\textbf{Model Details:} T5-small fine-tuned with ultra-low learning rate (2e-6) strategy, achieving 63.93\% Record F1 and 56.44\% Record EM on development set. The model was trained in two phases: Phase 1 (cold start, LR=5e-5) reached 36.66\% F1, then Phase 2 (ultra-low LR=2e-6) unlocked the checkpoint's full potential by making microscopic weight adjustments while staying in the optimal region.
+\textbf{Model Details:} T5-small fine-tuned with ultra-low learning rate (2e-6) strategy, achieving 63.93\% Record F1 and 56.44\% Record EM on development set. The model was trained in two phases: Phase 1 (cold start, LR=5e-5) reached 36.66\% F1, then Phase 2 (ultra-low LR=2e-6) unlocked the checkpoint's full potential by making microscopic weight adjustments while staying in the optimal region.\footnote{I used Cursor and ChatGPT to assist in documentation and to help verify the accuracy of my written code.}
 
-\section*{Extra Credit: }
-
-If you are doing extra credit assignment, please describe your system here, as well as provide a link to a google drive which contains a model checkpoint used to generate outputs you have submitted. 
-\textcolor{gray}{Optional TODO}
 \end{document}
